@@ -5,7 +5,7 @@ Telegram bot for redirecting POE2 trade messages.
 
 ## Installation
 
-Download the latest release from the [releases](https://github.com/poe2-whisper-bot/releases) page.
+Download the latest release from the [releases](https://github.com/EgeBalci/poe2-whisper-bot/releases) page.
 
 or
 
