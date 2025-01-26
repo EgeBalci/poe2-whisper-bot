@@ -160,7 +160,7 @@ if __name__ == "__main__":
 
     
     try:
-        with open(client_log_path, "r") as file:
+        with open(client_log_path, "r", encoding="utf-8") as file:
             # Move to the end of the file
             file.seek(0, 2)
             while True:
