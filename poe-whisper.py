@@ -1,4 +1,5 @@
-import sys
+import pynput
+import json
 import requests
 import logging
 import time
@@ -35,6 +36,11 @@ def is_purchase_whisper(message):
         return True
     return False
 
+def is_raw_whisper(message):
+    if "@From" in message and "Hi, I would like to buy your" not in message:
+        return True
+    return False
+
 def parse_purchase_whisper(message):
     """Parse a purchase whisper message and extract relevant information."""
     pattern = r'@From ([^:]+): Hi, I would like to buy your ([^$]+) listed for (\d+) (\w+) in \w+ \(stash tab "([^"]+)"; position: left (\d+), top (\d+)\)'
@@ -48,6 +54,17 @@ def parse_purchase_whisper(message):
             'tab': match.group(5),
             'position_left': int(match.group(6)),
             'position_top': int(match.group(7))
+        }
+    return None
+
+def parse_raw_whisper(message):
+    """Parse a non-purchase whisper message and extract relevant information"""
+    pattern = r'@From ([^:]+):([^$]+)'
+    match = re.search(pattern, message)
+    if match:
+        return {
+            'sender': match.group(1),
+            'message': match.group(2).strip()
         }
     return None
 
@@ -70,10 +87,10 @@ def send_start_message(bot_token, chat_id):
     except requests.exceptions.RequestException as e:
         logging.exception("Error sending start message: %s", e)
     except Exception as e:
-        logging.exception("Unexpected error sending start message: %s", e)
+        logging.exception("Unexpected error while sending start message: %s", e)
 
-def send_message_to_telegram(bot_token, chat_id, purchase_info):
-    """Send a message to a Telegram bot's chat."""
+def send_purchase_message_to_telegram(bot_token, chat_id, purchase_info):
+    """Send a purchase message to a Telegram bot's chat."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     message = f"**🎮 Path of Exile 2 🎮**\n\n"
     message += f"👤 `{purchase_info['sender']}`\n📦 `{purchase_info['item']} `\n💰 `{purchase_info['amount']}/{purchase_info['currency']} `\n📍 `{purchase_info['tab']} - {purchase_info['position_left']}, {purchase_info['position_top']}`\n⏰ `{datetime.now().strftime('%H:%M:%S')}`"""
@@ -85,9 +102,49 @@ def send_message_to_telegram(bot_token, chat_id, purchase_info):
     try:
         response = requests.post(url, json=payload)
         if response.status_code != 200:
-            logging.error("Failed to send message: %s, Status: %s, Response: %s", message, response.status_code, response.text)
+            logging.error("Failed to send purchase message: %s, Status: %s, Response: %s", message, response.status_code, response.text)
     except requests.exceptions.RequestException as e:
-        logging.exception("Error while sending message: %s", e)
+        logging.exception("Error while sending purchase message: %s", e)
+
+def send_raw_message_to_telegram(bot_token, chat_id, whisper_info, message):
+    """Send a non-purchase message to a Telegram bot's chat."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    message = f"⏰ `{datetime.now().strftime('%H:%M:%S')}`\n👤 `{whisper_info['sender']}`\n💬 `{whisper_info['message']}`"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "MarkdownV2"
+    }
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code != 200:
+            logging.error("Failed to send raw message: %s, Status: %s, Response: %s", message, response.status_code, response.text)
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error while sending raw message: %s", e)
+
+def get_messages_from_telegram(bot_token):
+    """Get the last message from Telegram bot's chat"""
+    url = f"https://api.telegram.org/bot{bot_token}/getUpdates?offset=-1"
+    try:
+        response = requests.get(url)
+        if response.status_code != 200:
+            logging.error("Failed to get message: %s, Status: %s, Response: %s", message, response.status_code, response.text)
+        return response.text
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error while getting message: %s", e)
+
+def parse_received_telegram_message(answer):
+    """Parse the last message from Telegram bot's chat"""
+    data = json.loads(answer)
+    update_id = data["result"][len(data["result"])-1]["update_id"]
+    message = data["result"][len(data["result"])-1]["message"]["text"]
+    return update_id, message
+
+def is_message_updated(update_id, offset):
+    """Check if the received message is updated"""
+    if offset != update_id:
+        return True
+    return False
 
 def focus_poe_window():
     """Focus the Path of Exile window if it exists."""
@@ -122,6 +179,21 @@ def focus_poe_window():
     except Exception as e:
         logging.exception("Error focusing PoE window: %s", e)
         return False
+
+def send_message_to_game_chat(answer):
+    """Send the received message from Telegram bot's chat to the game chat"""
+    """Used pynput module instead of win32com because I guess the fastest keystroke simulation occurs with pynput"""
+    try:
+        if focus_poe_window():
+            pynput.keyboard.Controller().tap(pynput.keyboard.Key.enter)
+            for i in range(1, 20):
+                pynput.keyboard.Controller().tap(pynput.keyboard.Key.backspace)
+            pynput.keyboard.Controller().type(answer)
+            pynput.keyboard.Controller().tap(pynput.keyboard.Key.enter)
+    except ImportError:
+        logging.error("pynput module not found. Please install pynput package.")
+    except Exception as e:
+        logging.exception("Error in send message thread: %s", e)
 
 def prevent_afk_state():
     """Periodically send 'x' key to PoE window to prevent AFK state."""
@@ -158,19 +230,27 @@ if __name__ == "__main__":
     anti_afk_thread = threading.Thread(target=prevent_afk_state, daemon=True)
     anti_afk_thread.start()
 
-    
     try:
+        # Get first update_id from Telegram bot's chat for first iteration of check if message sent or not
+        offset = parse_received_telegram_message(get_messages_from_telegram(bot_token))[0]
         with open(client_log_path, "r", encoding="utf-8") as file:
             # Move to the end of the file
             file.seek(0, 2)
             while True:
+                answer = parse_received_telegram_message(get_messages_from_telegram(bot_token))
+                if is_message_updated(answer[0], offset):
+                    offset = answer[0]
+                    send_message_to_game_chat(answer[1])
                 line = file.readline()
                 if line:
                     message = line.strip()
                     if message and is_purchase_whisper(message):
                         purchase_info = parse_purchase_whisper(message)
                         logging.info("New purchase whisper: %s", purchase_info)
-                        send_message_to_telegram(bot_token, chat_id, purchase_info)
+                        send_purchase_message_to_telegram(bot_token, chat_id, purchase_info)
+                    elif message and is_raw_whisper(message):
+                        whisper_info = parse_raw_whisper(message)
+                        send_raw_message_to_telegram(bot_token, chat_id, whisper_info, message)
                 else:
                     time.sleep(1)  # Wait for new lines
     except KeyboardInterrupt:
