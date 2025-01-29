@@ -1,5 +1,5 @@
 # poe2-whisper-bot
-Telegram bot for redirecting POE2 trade messages.
+Telegram bot for redirecting POE2 trade and whisper messages.
 
 ![POE2 Whisper Bot](./.github/example.png)
 
