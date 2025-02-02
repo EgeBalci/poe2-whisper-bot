@@ -136,8 +136,12 @@ def get_messages_from_telegram(bot_token):
 def parse_received_telegram_message(answer):
     """Parse the last message from Telegram bot's chat"""
     data = json.loads(answer)
-    update_id = data["result"][len(data["result"])-1]["update_id"]
-    message = data["result"][len(data["result"])-1]["message"]["text"]
+    if len(data["result"]) != 0:
+        update_id = data["result"][len(data["result"])-1]["update_id"]
+        message = data["result"][len(data["result"])-1]["message"]["text"]
+        return update_id, message
+    update_id = 0
+    message = 0
     return update_id, message
 
 def is_message_updated(update_id, offset):
